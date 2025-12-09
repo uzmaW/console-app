@@ -1,0 +1,1610 @@
+# Multi-Screen Todo Application - Complete Spec-Kit-Plus Specification
+
+**Spec-Kit-Plus v1.0 | Console Multi-Screen Todo Manager**
+
+---
+
+## 📜 CONSTITUTION
+
+### Project Vision
+A powerful, keyboard-driven console todo application that helps users organize tasks across multiple projects with priorities, tags, and categories. Built for developers and power users who prefer terminal workflows.
+
+### Core Principles
+1. **Keyboard First** - Every action accessible via hotkeys
+2. **Multi-View Organization** - Different perspectives on the same data
+3. **Fast & Responsive** - Sub-50ms interactions
+4. **Data Persistence** - JSON-based local storage
+5. **Zero Configuration** - Works out of the box
+6. **Extensible** - Plugin architecture for custom views
+
+### Design Philosophy
+- **Minimal Cognitive Load** - Clear visual hierarchy, intuitive navigation
+- **Power User Features** - Bulk operations, filters, quick search
+- **Progressive Disclosure** - Simple by default, powerful when needed
+- **Fail Gracefully** - Never lose data, always recoverable
+
+### Success Metrics
+- Task creation < 3 keystrokes
+- Navigate entire app without mouse
+- Load 1000+ tasks without lag
+- 100% data persistence reliability
+
+---
+
+## 📋 SPECIFICATION
+
+### Application Metadata
+```yaml
+name: "Todo Master"
+version: "1.0.0"
+description: "Multi-screen console todo application"
+runtime: "curses"
+package_manager: "uv"
+python_version: "3.11+"
+license: "MIT"
+author: "Spec-Kit-Plus"
+```
+
+### System Requirements
+- Python 3.11 or higher
+- Terminal with UTF-8 and 256-color support
+- 80x24 minimum terminal size (120x40 recommended)
+- ~10MB disk space for application and data
+
+---
+
+## 🗂️ DATA MODELS
+
+### Task
+```yaml
+fields:
+  id: {type: uuid, primary: true, auto: true}
+  title: {type: string, required: true, max_length: 200}
+  description: {type: text, default: ""}
+  status: {type: enum, values: [todo, in_progress, done, archived], default: todo}
+  priority: {type: enum, values: [low, medium, high, urgent], default: medium}
+  project: {type: string, default: "Inbox"}
+  tags: {type: array[string], default: []}
+  due_date: {type: date, optional: true}
+  created_at: {type: datetime, auto: true}
+  updated_at: {type: datetime, auto: true}
+  completed_at: {type: datetime, optional: true}
+  estimated_time: {type: integer, optional: true, unit: minutes}
+  actual_time: {type: integer, optional: true, unit: minutes}
+  parent_id: {type: uuid, optional: true, foreign_key: Task.id}
+  position: {type: integer, default: 0}
+
+indexes:
+  - [status, project]
+  - [due_date]
+  - [priority, status]
+  - [tags]
+
+validations:
+  - title: {not_empty: true, min_length: 1}
+  - priority: {required_if: {status: [in_progress, done]}}
+  - completed_at: {set_when: {status: done}}
+```
+
+### Project
+```yaml
+fields:
+  id: {type: uuid, primary: true, auto: true}
+  name: {type: string, required: true, unique: true}
+  description: {type: text, default: ""}
+  color: {type: string, default: "cyan"}
+  icon: {type: string, default: "📁"}
+  created_at: {type: datetime, auto: true}
+  archived: {type: boolean, default: false}
+  position: {type: integer, default: 0}
+
+validations:
+  - name: {not_empty: true, max_length: 50}
+  - color: {enum: [red, green, yellow, blue, magenta, cyan, white]}
+```
+
+### Tag
+```yaml
+fields:
+  name: {type: string, primary: true}
+  color: {type: string, default: "yellow"}
+  count: {type: integer, computed: true}
+
+computed:
+  count: "SELECT COUNT(*) FROM tasks WHERE tags CONTAINS name"
+```
+
+### Filter
+```yaml
+fields:
+  id: {type: uuid, primary: true, auto: true}
+  name: {type: string, required: true}
+  query: {type: json, required: true}
+  icon: {type: string, default: "🔍"}
+  hotkey: {type: string, optional: true, max_length: 1}
+
+examples:
+  - {name: "Today", query: {due_date: today}, hotkey: "t"}
+  - {name: "Urgent", query: {priority: urgent}, hotkey: "u"}
+  - {name: "Overdue", query: {due_date: {lt: today}, status: {ne: done}}}
+```
+
+---
+
+## 💾 DATA SOURCES
+
+### tasks_storage
+```yaml
+type: json_file
+path: "~/.config/todo-master/tasks.json"
+model: Task
+auto_save: true
+save_interval: 5000
+backup: true
+backup_count: 5
+encryption: false
+
+operations:
+  - create(task: Task) -> Task
+  - read(id: uuid) -> Task | null
+  - update(id: uuid, changes: dict) -> Task
+  - delete(id: uuid) -> boolean
+  - list(filter: dict, sort: string, limit: int) -> Task[]
+  - bulk_update(ids: uuid[], changes: dict) -> int
+  - search(query: string, fields: string[]) -> Task[]
+```
+
+### projects_storage
+```yaml
+type: json_file
+path: "~/.config/todo-master/projects.json"
+model: Project
+auto_save: true
+default_projects:
+  - {name: "Inbox", color: "cyan", icon: "📥", position: 0}
+  - {name: "Personal", color: "green", icon: "🏠", position: 1}
+  - {name: "Work", color: "blue", icon: "💼", position: 2}
+```
+
+### settings_storage
+```yaml
+type: json_file
+path: "~/.config/todo-master/settings.json"
+model: Settings
+defaults:
+  theme: "dark"
+  show_completed: false
+  default_priority: "medium"
+  auto_archive_completed: 7
+  sort_by: "priority"
+  confirm_delete: true
+  date_format: "%Y-%m-%d"
+  time_format: "24h"
+```
+
+### statistics
+```yaml
+type: computed
+refresh_interval: 60000
+metrics:
+  - total_tasks: "COUNT(tasks)"
+  - completed_today: "COUNT(tasks WHERE completed_at = today)"
+  - overdue: "COUNT(tasks WHERE due_date < today AND status != done)"
+  - by_priority: "GROUP BY priority, COUNT(*)"
+  - by_project: "GROUP BY project, COUNT(*)"
+  - completion_rate: "completed / total * 100"
+  - avg_completion_time: "AVG(actual_time WHERE status = done)"
+```
+
+---
+
+## 🖥️ UI SCREENS
+
+### Screen 1: Task List (Main)
+
+**Purpose:** Primary task management view with full CRUD operations
+
+**Layout:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ 📝 TODO MASTER                     📊 12 tasks  ✓ 5  ⏰ 2 overdue │
+├────────────────────────────────────────────────────────────────────┤
+│ 💼 Work ▼                [All] [Today] [Week]        🔍 Search: __ │
+├────┬───────────────────────────────────────────────┬───────┬───────┤
+│ ☐  │ Fix authentication bug                        │ 🔴 !!│ Today │
+│ ☐  │ Update documentation                          │ 🟡 ! │ Thu   │
+│ ☑  │ Code review for PR #123                       │ 🟢   │ Wed   │
+│ ☐  │ Refactor database queries                     │ 🟡 ! │ Fri   │
+│ ☐  │ Write unit tests                              │ 🟢   │       │
+│    │   #backend #testing                           │      │       │
+├────┴───────────────────────────────────────────────┴───────┴───────┤
+│ [n] New  [e] Edit  [d] Done  [x] Delete  [p] Project  [Tab] Next  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Components:**
+- Header bar with stats
+- Project selector dropdown
+- Quick filters (All, Today, Week)
+- Search box
+- Task table with columns:
+  - Checkbox (status indicator)
+  - Title (with description preview on hover)
+  - Priority indicator (🔴🟡🟢)
+  - Due date (relative format)
+- Tags displayed under title
+- Footer with hotkeys
+
+**Interactions:**
+```yaml
+hotkeys:
+  n: create_new_task()
+  e: edit_selected_task()
+  d: toggle_task_done()
+  x: delete_task_with_confirmation()
+  p: change_project()
+  t: add_tag()
+  f: open_filter_menu()
+  /: focus_search()
+  Space: toggle_task_checkbox()
+  Enter: view_task_details()
+  j/k: navigate_down/up
+  g/G: goto_top/bottom
+  1-5: set_priority()
+  
+mouse:
+  click_checkbox: toggle_task_done()
+  double_click_row: edit_task()
+  right_click: context_menu()
+```
+
+**Data Bindings:**
+```yaml
+tasks: tasks_storage.list(filter=current_filter, sort=current_sort)
+projects: projects_storage.list()
+current_project: state.selected_project
+selected_task: state.selected_row
+stats: statistics.compute()
+```
+
+---
+
+### Screen 2: Project View
+
+**Purpose:** Manage projects and view project-specific tasks
+
+**Layout:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ 📁 PROJECTS                                          3 active      │
+├────────────────────────────────────────────────────────────────────┤
+│ ┌─ 📥 Inbox ─────────────────────────────────────────────────────┐ │
+│ │ 5 tasks  •  2 completed  •  1 overdue                          │ │
+│ │ ☐ Review emails                                                │ │
+│ │ ☐ Schedule meeting                                             │ │
+│ └────────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│ ┌─ 💼 Work ──────────────────────────────────────────────────────┐ │
+│ │ 12 tasks  •  5 completed  •  2 overdue                         │ │
+│ │ ☐ Fix authentication bug                               🔴 !!  │ │
+│ │ ☐ Update documentation                                 🟡 !   │ │
+│ │ ☑ Code review for PR #123                             🟢     │ │
+│ └────────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│ ┌─ 🏠 Personal ──────────────────────────────────────────────────┐ │
+│ │ 3 tasks  •  1 completed  •  0 overdue                          │ │
+│ │ ☐ Buy groceries                                                │ │
+│ │ ☐ Call dentist                                                 │ │
+│ └────────────────────────────────────────────────────────────────┘ │
+├────────────────────────────────────────────────────────────────────┤
+│ [n] New Project  [e] Edit  [a] Archive  [c] Color  [Tab] Tasks    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Components:**
+- Project cards with:
+  - Icon and name
+  - Task statistics
+  - Top 3 tasks preview
+  - Progress indicator
+- Collapsible sections
+- Color-coded borders
+
+**Interactions:**
+```yaml
+hotkeys:
+  n: create_new_project()
+  e: edit_project()
+  a: archive_project()
+  c: change_project_color()
+  Enter: expand_collapse_project()
+  d: set_default_project()
+  
+actions:
+  create_project(name, color, icon):
+    - validate name uniqueness
+    - create in projects_storage
+    - refresh view
+  
+  archive_project(id):
+    - confirm if has active tasks
+    - set archived=true
+    - hide from main list
+```
+
+---
+
+### Screen 3: Calendar View
+
+**Purpose:** Timeline view of tasks with due dates
+
+**Layout:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ 📅 CALENDAR                            December 2024               │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│ OVERDUE (2)                                                        │
+│ ├─ 🔴 Fix authentication bug                            (3d ago)  │
+│ └─ 🟡 Update documentation                              (1d ago)  │
+│                                                                    │
+│ TODAY - Thursday, Dec 5                                            │
+│ ├─ 🔴 Code review for PR #123                                     │
+│ ├─ 🟢 Write unit tests                                            │
+│ └─ 🟡 Team standup meeting                                        │
+│                                                                    │
+│ TOMORROW - Friday, Dec 6                                           │
+│ ├─ 🟡 Refactor database queries                                   │
+│ └─ 🟢 Deploy to staging                                           │
+│                                                                    │
+│ SATURDAY, Dec 7                                                    │
+│ └─ 🏠 Buy groceries                                               │
+│                                                                    │
+│ NEXT WEEK (5)                                                      │
+│ MON: Client presentation, Design review                            │
+│ TUE: Budget planning                                               │
+│ WED: Team retrospective                                            │
+│                                                                    │
+│ LATER (3 tasks)                                                    │
+├────────────────────────────────────────────────────────────────────┤
+│ [t] Today  [w] Week  [m] Month  [r] Reschedule  [Tab] Tasks       │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Components:**
+- Grouped by date buckets:
+  - Overdue (with days ago)
+  - Today
+  - Tomorrow
+  - Next 7 days
+  - Later
+- Tree structure with expandable dates
+- Priority indicators
+- Quick reschedule
+
+**Interactions:**
+```yaml
+hotkeys:
+  t: jump_to_today()
+  w: toggle_week_view()
+  m: toggle_month_view()
+  r: reschedule_selected()
+  d: set_due_date()
+  +/-: adjust_due_date(±1_day)
+  
+views:
+  day: show only today
+  week: group by days (7 days)
+  month: show calendar grid
+```
+
+---
+
+### Screen 4: Tags & Filters
+
+**Purpose:** Tag management and custom filter creation
+
+**Layout:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ 🏷️  TAGS & FILTERS                                                │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│ TAGS                                              [n] New Tag      │
+│ ┌──────────────────────────────────────────────────────────────┐  │
+│ │ 🔴 urgent          (3)    🟢 backend        (8)              │  │
+│ │ 🟡 bug             (5)    🟡 frontend       (4)              │  │
+│ │ 🔵 feature         (12)   🟠 documentation  (2)              │  │
+│ │ 🟣 meeting         (6)    ⚪ personal       (3)              │  │
+│ └──────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│ SMART FILTERS                                     [n] New Filter   │
+│ ┌──────────────────────────────────────────────────────────────┐  │
+│ │ [t] 📅 Today          : due_date = today              (3)    │  │
+│ │ [u] 🔥 Urgent         : priority = urgent             (2)    │  │
+│ │ [o] ⏰ Overdue        : due_date < today & !done      (2)    │  │
+│ │ [w] 📆 This Week      : due_date <= +7d               (8)    │  │
+│ │ [c] ✓ Completed       : status = done                 (5)    │  │
+│ │ [i] 📥 Inbox          : project = Inbox               (5)    │  │
+│ └──────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│ CUSTOM FILTERS                                                     │
+│ ┌──────────────────────────────────────────────────────────────┐  │
+│ │ 🎯 High Priority Work  : priority=high & project=Work  (4)   │  │
+│ │ 🏃 In Progress         : status=in_progress             (3)   │  │
+│ │ 🔍 Needs Review        : tags contains "review"         (2)   │  │
+│ └──────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+├────────────────────────────────────────────────────────────────────┤
+│ [n] New  [e] Edit  [d] Delete  [f] Apply Filter  [Tab] Tasks     │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Components:**
+- Tag cloud with counts
+- Smart filters (predefined)
+- Custom filter builder
+- Filter syntax helper
+
+**Interactions:**
+```yaml
+tag_operations:
+  create_tag(name, color):
+    - validate uniqueness
+    - assign color
+    - save to storage
+  
+  rename_tag(old_name, new_name):
+    - update all tasks with tag
+    - preserve references
+  
+  merge_tags(source, target):
+    - replace source with target in all tasks
+    - delete source tag
+
+filter_operations:
+  create_filter(name, query, hotkey):
+    - parse query syntax
+    - validate query
+    - assign optional hotkey
+  
+  apply_filter(filter_id):
+    - execute query on tasks
+    - display results in main view
+    - persist active filter
+
+query_syntax:
+  - "priority = high"
+  - "due_date < today"
+  - "tags contains 'urgent'"
+  - "project = 'Work' AND status != done"
+  - "created_at > -7d"
+```
+
+---
+
+### Screen 5: Statistics & Analytics
+
+**Purpose:** Visual insights and productivity metrics
+
+**Layout:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ 📊 STATISTICS                                  Last 30 Days        │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│ OVERVIEW                                                           │
+│ ┌────────────┬────────────┬────────────┬────────────┐             │
+│ │   TOTAL    │ COMPLETED  │   ACTIVE   │  OVERDUE   │             │
+│ │    142     │     89     │     51     │     2      │             │
+│ │            │   62.7%    │   35.9%    │   1.4%     │             │
+│ └────────────┴────────────┴────────────┴────────────┘             │
+│                                                                    │
+│ COMPLETION RATE (Last 7 Days)                                     │
+│ ┌────────────────────────────────────────────────────────────┐    │
+│ │  100% │                                        █            │    │
+│ │   75% │                          █        ██   █            │    │
+│ │   50% │         █           ██   █        ██   █            │    │
+│ │   25% │    █    █      ██   ██   █   ██   ██   █       █   │    │
+│ │    0% └────┴────┴────┴────┴────┴────┴────┴────┴────┴────┘  │    │
+│ │        Mon  Tue  Wed  Thu  Fri  Sat  Sun                    │    │
+│ └────────────────────────────────────────────────────────────┘    │
+│                                                                    │
+│ BY PROJECT                        BY PRIORITY                      │
+│ ┌─────────────────────────┐      ┌─────────────────────────┐      │
+│ │ 💼 Work          45 ████ │      │ 🔴 Urgent        12 ███ │      │
+│ │ 🏠 Personal      28 ███  │      │ 🟡 High          34 ████│      │
+│ │ 📥 Inbox         23 ██   │      │ 🟢 Medium        67 █████│      │
+│ │ 🎯 Side Projects 12 █    │      │ ⚪ Low           29 ███  │      │
+│ └─────────────────────────┘      └─────────────────────────┘      │
+│                                                                    │
+│ TOP TAGS                                                           │
+│ #backend (23)  #frontend (18)  #bug (15)  #feature (34)           │
+│                                                                    │
+│ PRODUCTIVITY                                                       │
+│ • Average completion time: 2.3 hours                              │
+│ • Most productive day: Tuesday (avg 8 tasks)                      │
+│ • Peak hours: 9am-11am, 2pm-4pm                                   │
+│ • Longest streak: 12 days                                         │
+├────────────────────────────────────────────────────────────────────┤
+│ [r] Refresh  [e] Export  [p] Period  [Tab] Tasks                  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**Components:**
+- Summary cards
+- Bar chart (completion rate)
+- Horizontal bar charts (projects, priority)
+- Tag cloud with counts
+- Key metrics list
+
+**Data:**
+```yaml
+metrics:
+  - total_tasks
+  - completion_rate
+  - tasks_by_project
+  - tasks_by_priority
+  - tasks_by_tag
+  - completion_time_avg
+  - most_productive_day
+  - current_streak
+
+periods:
+  - 7_days
+  - 30_days
+  - 90_days
+  - all_time
+```
+
+---
+
+### Screen 6: Settings
+
+**Purpose:** Application configuration and preferences
+
+**Layout:**
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ ⚙️  SETTINGS                                                       │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│ APPEARANCE                                                         │
+│ ┌──────────────────────────────────────────────────────────────┐  │
+│ │ Theme:              [●] Dark    [ ] Light    [ ] Auto        │  │
+│ │ Color Scheme:       [Solarized ▼]                            │  │
+│ │ Font Size:          [Medium ▼]                               │  │
+│ │ Show Icons:         [✓] Enabled                              │  │
+│ │ Compact Mode:       [ ] Enabled                              │  │
+│ └──────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│ BEHAVIOR                                                           │
+│ ┌──────────────────────────────────────────────────────────────┐  │
+│ │ Default Project:    [Inbox ▼]                                │  │
+│ │ Default Priority:   [Medium ▼]                               │  │
+│ │ Auto-archive after: [7] days                                 │  │
+│ │ Confirm Deletes:    [✓] Enabled                              │  │
+│ │ Show Completed:     [ ] In main list                         │  │
+│ │ Sort By:            [Priority ▼]                             │  │
+│ └──────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│ DATE & TIME                                                        │
+│ ┌──────────────────────────────────────────────────────────────┐  │
+│ │ Date Format:        [YYYY-MM-DD ▼]                           │  │
+│ │ Time Format:        [●] 24-hour    [ ] 12-hour               │  │
+│ │ Week Starts On:     [Monday ▼]                               │  │
+│ └──────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│ DATA                                                               │
+│ ┌──────────────────────────────────────────────────────────────┐  │
+│ │ Storage Location:   ~/.config/todo-master/                   │  │
+│ │ Auto-save:          [✓] Every 5 seconds                      │  │
+│ │ Backup Count:       [5] backups                              │  │
+│ │                                                              │  │
+│ │ [Export Data] [Import Data] [Reset to Defaults]             │  │
+│ └──────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+├────────────────────────────────────────────────────────────────────┤
+│ [s] Save  [r] Reset  [Tab] Tasks                                  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🎯 NAVIGATION
+
+### Global Navigation
+```yaml
+screen_order:
+  1: task_list (main)
+  2: project_view
+  3: calendar_view
+  4: tags_filters
+  5: statistics
+  6: settings
+
+hotkeys:
+  Tab: next_screen()
+  Shift+Tab: previous_screen()
+  1-6: jump_to_screen(n)
+  q: quit_application()
+  ?: show_help_modal()
+  Esc: close_modal()
+  
+  Ctrl+f: global_search()
+  Ctrl+n: quick_add_task()
+  Ctrl+s: save_all()
+  Ctrl+z: undo()
+  Ctrl+y: redo()
+
+navigation_flow:
+  Tasks → Projects → Calendar → Tags → Stats → Settings → (wrap to Tasks)
+```
+
+### Context Menus
+```yaml
+task_context_menu:
+  - Edit (e)
+  - Mark Done (d)
+  - Change Priority (p)
+  - Set Due Date (D)
+  - Add Tags (t)
+  - Move to Project (m)
+  - Duplicate (u)
+  - Delete (x)
+  - View Details (Enter)
+
+project_context_menu:
+  - Edit (e)
+  - Change Color (c)
+  - Archive (a)
+  - Export (x)
+  - Delete (X)
+```
+
+---
+
+## 🎬 ACTIONS
+
+### Task Actions
+
+#### create_task
+```yaml
+trigger: [n] key or Ctrl+N
+flow:
+  1. Show modal with form:
+     - Title (required)
+     - Description (optional)
+     - Project (dropdown)
+     - Priority (dropdown)
+     - Due date (date picker)
+     - Tags (autocomplete)
+  2. Validate input
+  3. Generate UUID
+  4. Set created_at
+  5. Save to tasks_storage
+  6. Refresh view
+  7. Select new task
+
+validations:
+  - title: not empty
+  - due_date: valid date format
+  - project: exists in projects_storage
+
+shortcuts:
+  - Enter: Save and close
+  - Esc: Cancel
+  - Tab: Next field
+```
+
+#### edit_task
+```yaml
+trigger: [e] key on selected task
+flow:
+  1. Load task data
+  2. Show prefilled form
+  3. Allow modifications
+  4. Validate changes
+  5. Update task with changes
+  6. Set updated_at
+  7. Save to storage
+  8. Refresh view
+
+optimizations:
+  - Only save changed fields
+  - Debounce auto-save
+  - Show unsaved indicator
+```
+
+#### toggle_task_done
+```yaml
+trigger: [d] key or Space on checkbox
+flow:
+  1. Get selected task
+  2. Toggle status: todo ↔ done
+  3. If done:
+     - Set completed_at = now
+     - Calculate actual_time if tracked
+  4. If undone:
+     - Clear completed_at
+  5. Save to storage
+  6. Update view
+  7. Show notification
+
+animations:
+  - Fade out if done (optional)
+  - Strike-through text
+  - Checkbox check animation
+```
+
+#### delete_task
+```yaml
+trigger: [x] key
+flow:
+  1. Get selected task
+  2. Show confirmation modal:
+     "Delete '{title}'? [Y/n]"
+  3. If confirmed:
+     - Remove from tasks_storage
+     - Log deletion
+     - Show undo notification (5s)
+  4. If cancelled: close modal
+  5. Refresh view
+
+undo:
+  - Store deleted task in memory
+  - Allow undo within 5 seconds
+  - Clear after timeout or next deletion
+```
+
+#### bulk_operations
+```yaml
+triggers:
+  - Visual mode: [v] key
+  - Select all: [Ctrl+A]
+  - Deselect: [Esc]
+
+operations:
+  mark_done(task_ids[]):
+    - Update all to status=done
+    - Set completed_at
+    - Batch save
+  
+  change_project(task_ids[], project_id):
+    - Update all to new project
+    - Batch save
+  
+  add_tags(task_ids[], tags[]):
+    - Append tags to existing
+    - Remove duplicates
+    - Batch save
+  
+  bulk_delete(task_ids[]):
+    - Confirm with count
+    - Delete all
+    - Allow undo
+```
+
+### Filter Actions
+
+#### apply_filter
+```yaml
+trigger: Select filter or hotkey
+flow:
+  1. Get filter query
+  2. Parse query syntax
+  3. Execute on tasks_storage
+  4. Update main view with results
+  5. Show active filter indicator
+  6. Persist to session state
+
+query_engine:
+  parser: custom DSL
+  operators: [=, !=, <, >, <=, >=, contains, in]
+  combinators: [AND, OR, NOT]
+  
+examples:
+  - "priority = urgent"
+  - "due_date < today AND status != done"
+  - "tags contains 'backend' OR tags contains 'frontend'"
+```
+
+### Search Actions
+
+#### global_search
+```yaml
+trigger: [Ctrl+F] or [/]
+flow:
+  1. Show search input at top
+  2. As user types:
+     - Search in title, description, tags
+     - Fuzzy matching enabled
+     - Show live results
+  3. Navigate results with arrows
+  4. Enter to select task
+  5. Esc to close
+
+search_features:
+  - Fuzzy matching
+  - Highlight matches
+  - Search history
+  - Autocomplete
+  
+search_syntax:
+  - "fix bug" → full text search
+  - "p:Work" → project filter
+  - "t:urgent" → tag filter
+  - "@today" → due date filter
+  - "is:done" → status filter
+```
+
+---
+
+## 📅 TASK PLAN
+
+### Phase 1: Foundation (Week 1)
+```yaml
+tasks:
+  - [x] Setup project structure with uv
+  - [x] Create data models (Task, Project, Tag, Filter)
+  - [x] Implement JSON storage layer
+  - [x] Build curses rendering engine
+  - [x] Create base screen class
+  - [x] Implement navigation system
+  - [ ] Add keyboard input handler
+
+deliverables:
+  - Working skeleton app
+  - Basic navigation between empty screens
+  - Data persistence working
+```
+
+### Phase 2: Core Screens (Week 2)
+```yaml
+tasks:
+  - [ ] Implement Task List screen
+    - [ ] Table widget
+    - [ ] Task rendering
+    - [ ] Selection handling
+  - [ ] Build task CRUD operations
+    - [ ] Create modal
+    - [ ] Edit modal
+    - [ ] Delete with confirmation
+  - [ ] Add Project View screen
+    - [ ] Project cards
+    - [ ] Task preview
+  - [ ] Implement basic filtering
+
+deliverables:
+  - Functional task management
+  - Project organization
+  - Basic CRUD complete
+```
+
+### Phase 3: Advanced Features (Week 3)
+```yaml
+tasks:
+  - [ ] Calendar View implementation
+    - [ ] Date grouping
+    - [ ] Overdue handling
+    - [ ] Quick reschedule
+  - [ ] Tags & Filters screen
+    - [ ] Tag management
+    - [ ] Filter builder
+    - [ ] Query parser
+  - [ ] Search functionality
+    - [ ] Full-text search
+    - [ ] Search syntax parser
+  - [ ] Bulk operations
+
+deliverables:
+  - Complete calendar view
+  - Tag system working
+  - Advanced search
+```
+
+### Phase 4: Polish & Analytics (Week 4)
+```yaml
+tasks:
+  - [ ] Statistics screen
+    - [ ] Data aggregation
+    - [ ] Charts rendering
+    - [ ] Export functionality
+  - [ ] Settings screen
+    - [ ] Configuration management
+    - [ ] Theme switching
+  - [ ] Performance optimization
+    - [ ] Lazy loading
+    - [ ] Caching
+  - [ ] Error handling
+  - [ ] User documentation
+
+deliverables:
+  - Complete application
+  - All 6 screens functional
+  - Comprehensive testing
+  - User guide
+```
+
+### Phase 5: Optional Enhancements
+```yaml
+tasks:
+  - [ ] Recurring tasks
+  - [ ] Task dependencies
+  - [ ] Time tracking
+  - [ ] Pomodoro timer
+  - [ ] Cloud sync
+  - [ ] Plugin system
+  - [ ] API server
+  - [ ] CLI commands
+```
+
+---
+
+## 🛠️ IMPLEMENTATION
+
+### Project Structure
+```
+todo-master/
+├── todo-master.spec.md              # This specification
+├── pyproject.toml                   # uv configuration
+├── README.md                        # User guide
+├── LICENSE                          # MIT License
+├── .python-version                  # 3.11
+├── .gitignore
+│
+├── src/
+│   ├── __init__.py
+│   ├── main.py                      # Entry point
+│   │
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── app.py                   # Main application
+│   │   ├── navigation.py            # Screen routing
+│   │   ├── input_handler.py         # Keyboard handling
+│   │   ├── renderer.py              # Curses renderer
+│   │   ├── state.py                 # Application state
+│   │   └── config.py                # Configuration
+│   │
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── models.py                # Data models
+│   │   ├── storage.py               # JSON storage
+│   │   ├── query.py                 # Query engine
+│   │   └── validators.py            # Data validation
+│   │
+│   ├── screens/
+│   │   ├── __init__.py
+│   │   ├── base.py                  # Base screen
+│   │   ├── task_list.py             # Main task screen
+│   │   ├── project_view.py          # Project management
+│   │   ├── calendar_view.py         # Timeline view
+│   │   ├── tags_filters.py          # Tag/filter management
+│   │   ├── statistics.py            # Analytics
+│   │   └── settings.py              # Configuration
+│   │
+│   ├── widgets/
+│   │   ├── __init__.py
+│   │   ├── table.py                 # Data table
+│   │   ├── modal.py                 # Modal dialogs
+│   │   ├── input.py                 # Text input
+│   │   ├── dropdown.py              # Select dropdown
+│   │   ├── checkbox.py              # Checkbox
+│   │   ├── datepicker.py            # Date selector
+│   │   ├── chart.py                 # Bar/line charts
+│   │   └── autocomplete.py          # Tag autocomplete
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       ├── date_utils.py            # Date formatting
+│       ├── colors.py                # Color schemes
+│       ├── icons.py                 # Unicode icons
+│       └── helpers.py               # Misc utilities
+│
+├── tests/
+│   ├── __init__.py
+│   ├── test_models.py
+│   ├── test_storage.py
+│   ├── test_query.py
+│   ├── test_screens.py
+│   └── test_widgets.py
+│
+└── docs/
+    ├── user_guide.md
+    ├── developer_guide.md
+    └── api_reference.md
+```
+
+### Installation
+
+#### Prerequisites
+```bash
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Verify installation
+uv --version
+```
+
+#### Project Setup
+```bash
+# Create project
+uv init todo-master
+cd todo-master
+
+# Add dependencies
+uv add python-dateutil
+
+# Add dev dependencies
+uv add --dev pytest pytest-cov types-curses black ruff
+
+# Set Python version
+echo "3.11" > .python-version
+```
+
+#### pyproject.toml
+```toml
+[project]
+name = "todo-master"
+version = "1.0.0"
+description = "Multi-screen console todo application"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "python-dateutil>=2.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "types-curses>=1.101.0",
+    "black>=24.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+todo = "src.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+```
+
+### Core Implementation
+
+#### src/main.py
+```python
+#!/usr/bin/env python3
+"""Todo Master - Console todo application"""
+import sys
+import argparse
+from src.core.app import TodoApp
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Todo Master - Multi-screen console todo app"
+    )
+    parser.add_argument(
+        "--config",
+        default="~/.config/todo-master",
+        help="Configuration directory"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug mode"
+    )
+    
+    args = parser.parse_args()
+    
+    try:
+        app = TodoApp(config_dir=args.config, debug=args.debug)
+        app.run()
+    except KeyboardInterrupt:
+        print("\nGoodbye!")
+        sys.exit(0)
+    except Exception as e:
+        if args.debug:
+            raise
+        print(f"Error: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```
+
+#### src/data/models.py
+```python
+"""Data models for Todo Master"""
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Optional, List
+from uuid import uuid4, UUID
+from enum import Enum
+
+class TaskStatus(Enum):
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    ARCHIVED = "archived"
+
+class Priority(Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    URGENT = "urgent"
+
+@dataclass
+class Task:
+    title: str
+    id: UUID = field(default_factory=uuid4)
+    description: str = ""
+    status: TaskStatus = TaskStatus.TODO
+    priority: Priority = Priority.MEDIUM
+    project: str = "Inbox"
+    tags: List[str] = field(default_factory=list)
+    due_date: Optional[datetime] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+    completed_at: Optional[datetime] = None
+    estimated_time: Optional[int] = None  # minutes
+    actual_time: Optional[int] = None
+    parent_id: Optional[UUID] = None
+    position: int = 0
+    
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "title": self.title,
+            "description": self.description,
+            "status": self.status.value,
+            "priority": self.priority.value,
+            "project": self.project,
+            "tags": self.tags,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "estimated_time": self.estimated_time,
+            "actual_time": self.actual_time,
+            "parent_id": str(self.parent_id) if self.parent_id else None,
+            "position": self.position,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        # Parse dates
+        for date_field in ["due_date", "created_at", "updated_at", "completed_at"]:
+            if data.get(date_field):
+                data[date_field] = datetime.fromisoformat(data[date_field])
+        
+        # Parse enums
+        data["status"] = TaskStatus(data["status"])
+        data["priority"] = Priority(data["priority"])
+        
+        # Parse UUIDs
+        data["id"] = UUID(data["id"])
+        if data.get("parent_id"):
+            data["parent_id"] = UUID(data["parent_id"])
+        
+        return cls(**data)
+
+@dataclass
+class Project:
+    name: str
+    id: UUID = field(default_factory=uuid4)
+    description: str = ""
+    color: str = "cyan"
+    icon: str = "📁"
+    created_at: datetime = field(default_factory=datetime.now)
+    archived: bool = False
+    position: int = 0
+    
+    def to_dict(self) -> dict:
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "description": self.description,
+            "color": self.color,
+            "icon": self.icon,
+            "created_at": self.created_at.isoformat(),
+            "archived": self.archived,
+            "position": self.position,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "Project":
+        data["id"] = UUID(data["id"])
+        data["created_at"] = datetime.fromisoformat(data["created_at"])
+        return cls(**data)
+```
+
+#### src/data/storage.py
+```python
+"""JSON-based storage engine"""
+import json
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+from uuid import UUID
+import shutil
+from datetime import datetime
+
+from .models import Task, Project
+
+class Storage:
+    def __init__(self, config_dir: str):
+        self.config_dir = Path(config_dir).expanduser()
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.tasks_file = self.config_dir / "tasks.json"
+        self.projects_file = self.config_dir / "projects.json"
+        self.settings_file = self.config_dir / "settings.json"
+        
+        self._init_files()
+    
+    def _init_files(self):
+        """Initialize storage files"""
+        if not self.tasks_file.exists():
+            self._save_json(self.tasks_file, [])
+        
+        if not self.projects_file.exists():
+            default_projects = [
+                {"name": "Inbox", "color": "cyan", "icon": "📥", "position": 0},
+                {"name": "Personal", "color": "green", "icon": "🏠", "position": 1},
+                {"name": "Work", "color": "blue", "icon": "💼", "position": 2},
+            ]
+            projects = [Project.from_dict({**p, "id": str(UUID(int=i)), "created_at": datetime.now().isoformat()}) 
+                       for i, p in enumerate(default_projects)]
+            self.save_projects(projects)
+        
+        if not self.settings_file.exists():
+            self._save_json(self.settings_file, {
+                "theme": "dark",
+                "default_project": "Inbox",
+                "default_priority": "medium",
+                "auto_archive_days": 7,
+                "confirm_delete": True,
+                "show_completed": False,
+                "sort_by": "priority",
+            })
+    
+    def _save_json(self, path: Path, data: Any):
+        """Save data to JSON file"""
+        with path.open("w") as f:
+            json.dump(data, f, indent=2)
+    
+    def _load_json(self, path: Path) -> Any:
+        """Load data from JSON file"""
+        with path.open("r") as f:
+            return json.load(f)
+    
+    def backup(self):
+        """Create backup of all data files"""
+        backup_dir = self.config_dir / "backups"
+        backup_dir.mkdir(exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for file in [self.tasks_file, self.projects_file, self.settings_file]:
+            if file.exists():
+                backup_file = backup_dir / f"{file.stem}_{timestamp}{file.suffix}"
+                shutil.copy(file, backup_file)
+        
+        # Keep only last 5 backups
+        backups = sorted(backup_dir.glob("*.json"))
+        for old_backup in backups[:-15]:  # 3 files * 5 backups
+            old_backup.unlink()
+    
+    # Task operations
+    def load_tasks(self) -> List[Task]:
+        """Load all tasks"""
+        data = self._load_json(self.tasks_file)
+        return [Task.from_dict(t) for t in data]
+    
+    def save_tasks(self, tasks: List[Task]):
+        """Save all tasks"""
+        data = [t.to_dict() for t in tasks]
+        self._save_json(self.tasks_file, data)
+    
+    def add_task(self, task: Task) -> Task:
+        """Add a new task"""
+        tasks = self.load_tasks()
+        tasks.append(task)
+        self.save_tasks(tasks)
+        return task
+    
+    def update_task(self, task_id: UUID, changes: Dict[str, Any]) -> Optional[Task]:
+        """Update a task"""
+        tasks = self.load_tasks()
+        for task in tasks:
+            if task.id == task_id:
+                for key, value in changes.items():
+                    setattr(task, key, value)
+                task.updated_at = datetime.now()
+                self.save_tasks(tasks)
+                return task
+        return None
+    
+    def delete_task(self, task_id: UUID) -> bool:
+        """Delete a task"""
+        tasks = self.load_tasks()
+        original_count = len(tasks)
+        tasks = [t for t in tasks if t.id != task_id]
+        if len(tasks) < original_count:
+            self.save_tasks(tasks)
+            return True
+        return False
+    
+    # Project operations
+    def load_projects(self) -> List[Project]:
+        """Load all projects"""
+        data = self._load_json(self.projects_file)
+        return [Project.from_dict(p) for p in data]
+    
+    def save_projects(self, projects: List[Project]):
+        """Save all projects"""
+        data = [p.to_dict() for p in projects]
+        self._save_json(self.projects_file, data)
+    
+    # Settings operations
+    def load_settings(self) -> Dict[str, Any]:
+        """Load settings"""
+        return self._load_json(self.settings_file)
+    
+    def save_settings(self, settings: Dict[str, Any]):
+        """Save settings"""
+        self._save_json(self.settings_file, settings)
+```
+
+### Running the Application
+
+```bash
+# Install project
+uv sync
+
+# Run application
+uv run todo
+
+# Or with Python
+uv run python src/main.py
+
+# With debug mode
+uv run todo --debug
+
+# Custom config directory
+uv run todo --config ~/my-todos
+```
+
+### Development Commands
+
+```bash
+# Run tests
+uv run pytest
+
+# With coverage
+uv run pytest --cov=src tests/
+
+# Format code
+uv run black src/ tests/
+
+# Lint code
+uv run ruff check src/ tests/
+
+# Type check (if mypy added)
+uv run mypy src/
+```
+
+---
+
+## 📚 USAGE GUIDE
+
+### Quick Start
+
+1. **Launch the application:**
+   ```bash
+   todo
+   ```
+
+2. **Add your first task:**
+   - Press `n` for new task
+   - Type title and press Enter
+   - Set priority with `1-4`
+   - Press Enter to save
+
+3. **Navigate screens:**
+   - Press `Tab` to go to next screen
+   - Press `1-6` to jump to specific screen
+   - Press `q` to quit
+
+### Keyboard Shortcuts
+
+#### Global
+- `Tab` / `Shift+Tab` - Next/Previous screen
+- `1-6` - Jump to screen
+- `Ctrl+F` / `/` - Search
+- `Ctrl+N` - Quick add task
+- `?` - Show help
+- `q` - Quit
+
+#### Task List
+- `n` - New task
+- `e` - Edit selected
+- `d` / `Space` - Mark done
+- `x` - Delete
+- `p` - Change project
+- `t` - Add tags
+- `j/k` - Navigate up/down
+- `Enter` - View details
+
+#### Projects
+- `n` - New project
+- `e` - Edit project
+- `a` - Archive project
+- `c` - Change color
+
+#### Calendar
+- `t` - Jump to today
+- `w` - Toggle week view
+- `r` - Reschedule task
+- `+/-` - Adjust date
+
+### Tips & Tricks
+
+1. **Bulk Operations:**
+   - Press `v` to enter visual mode
+   - Select multiple tasks with `j/k`
+   - Press `d` to mark all done
+
+2. **Quick Filters:**
+   - Type `/` then `@today` for today's tasks
+   - Type `/` then `p:Work` for work project
+   - Type `/` then `#urgent` for urgent tags
+
+3. **Keyboard Efficiency:**
+   - Most operations are 1-2 keystrokes
+   - Learn the hotkeys for frequent actions
+   - Use number keys for quick priority setting
+
+---
+
+## 🎨 THEMES & CUSTOMIZATION
+
+### Color Schemes
+```yaml
+themes:
+  dark:
+    background: black
+    foreground: white
+    accent: cyan
+    success: green
+    warning: yellow
+    error: red
+  
+  light:
+    background: white
+    foreground: black
+    accent: blue
+    success: green
+    warning: orange
+    error: red
+  
+  solarized:
+    # Solarized Dark color scheme
+```
+
+### Custom Icons
+```python
+ICONS = {
+    "task": "☐",
+    "done": "☑",
+    "urgent": "🔴",
+    "high": "🟡",
+    "medium": "🟢",
+    "low": "⚪",
+    "project": "📁",
+    "calendar": "📅",
+    "tag": "🏷️",
+    "filter": "🔍",
+    "stats": "📊",
+    "settings": "⚙️",
+}
+```
+
+---
+
+## 🧪 TESTING STRATEGY
+
+### Unit Tests
+- Data models validation
+- Storage operations
+- Query parser
+- Date utilities
+
+### Integration Tests
+- Screen rendering
+- Navigation flow
+- Data persistence
+- Bulk operations
+
+### Manual Testing Checklist
+- [ ] Create, edit, delete tasks
+- [ ] Navigate all screens
+- [ ] Apply filters
+- [ ] Search functionality
+- [ ] Project management
+- [ ] Settings persistence
+- [ ] Data backup/restore
+- [ ] Performance with 1000+ tasks
+
+---
+
+## 📈 PERFORMANCE CONSIDERATIONS
+
+### Optimization Strategies
+1. **Lazy Loading** - Load tasks on demand
+2. **Virtual Scrolling** - Render only visible rows
+3. **Caching** - Cache filtered/sorted results
+4. **Debouncing** - Delay search until typing stops
+5. **Batch Updates** - Group storage operations
+
+### Benchmarks
+- Load 1000 tasks: < 100ms
+- Filter/search: < 50ms
+- Screen render: < 16ms (60 FPS)
+- Auto-save: < 10ms
+
+---
+
+## 🔮 FUTURE ENHANCEMENTS
+
+### Planned Features
+- [ ] Recurring tasks (daily, weekly, monthly)
+- [ ] Task dependencies (blocked by)
+- [ ] Time tracking with pomodoro
+- [ ] Eisenhower matrix view
+- [ ] Gantt chart view
+- [ ] Cloud sync (optional)
+- [ ] Mobile companion app
+- [ ] Plugin system
+- [ ] Export to various formats
+- [ ] CLI commands mode
+
+### Plugin API
+```python
+class TodoPlugin:
+    def on_task_create(self, task): pass
+    def on_task_complete(self, task): pass
+    def add_screen(self) -> Screen: pass
+    def add_hotkey(self, key, action): pass
+```
+
+---
+
+## 📄 LICENSE
+
+MIT License - See LICENSE file for details
+
+---
+
+**END OF SPECIFICATION**
+
+This complete specification defines every aspect of the Todo Master application following Spec-Kit-Plus methodology with:
+- Constitution (vision, principles)
+- Specification (models, screens, data)
+- Plan (phased development)
+- Implementation (structure, code, guide)
+
+Ready to build! 🚀

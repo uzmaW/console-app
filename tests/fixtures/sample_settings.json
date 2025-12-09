@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "settings": {
+    "theme": "dark",
+    "color_scheme": "solarized",
+    "show_completed": false,
+    "default_priority": "medium",
+    "auto_archive_completed": 7,
+    "sort_by": "priority",
+    "confirm_delete": true,
+    "date_format": "%Y-%m-%d",
+    "time_format": "24h",
+    "week_starts_on": "Monday",
+    "auto_save_interval": 5,
+    "backup_count": 5
+  },
+  "saved_at": "2025-12-09T16:00:00"
+}

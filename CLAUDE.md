@@ -208,3 +208,10 @@ Wait for consent; never auto-create ADRs. Group related decisions (stacks, authe
 
 ## Code Standards
 See `.specify/memory/constitution.md` for code quality, testing, performance, security, and architecture principles.
+
+## Active Technologies
+- Python 3.11+ (002-todo-master-app)
+- JSON files at `~/.config/todo-master/` (tasks.json, projects.json, settings.json) (002-todo-master-app)
+
+## Recent Changes
+- 002-todo-master-app: Added Python 3.11+
